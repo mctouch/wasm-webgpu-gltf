@@ -500,11 +500,11 @@ impl Renderer {
         let aspect = self.config.width as f32 / self.config.height as f32;
         let cam_angle = time * 0.3;
         let eye = [
-            cam_angle.cos() * 6.0,
-            3.0 + (time * 0.5).sin() * 0.5,
-            cam_angle.sin() * 6.0,
+            cam_angle.cos() * 7.0,
+            3.5 + (time * 0.5).sin() * 0.5,
+            cam_angle.sin() * 7.0,
         ];
-        let view = look_at(eye, [0.0, 0.5, 0.0], [0.0, 1.0, 0.0]);
+        let view = look_at(eye, [0.0, 0.8, 0.0], [0.0, 1.0, 0.0]);
         let proj = perspective(45f32.to_radians(), aspect, 0.1, 100.0);
         let vp = mat4_mul(proj, view);
 

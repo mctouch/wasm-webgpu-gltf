@@ -1,92 +1,159 @@
 #!/usr/bin/env python3
-"""Generate a glTF 2.0 .glb file with two boxes and a glowing cable between them."""
+"""Generate a glTF 2.0 .glb file with three boxes and a glowing cable that arcs above the middle box."""
 import struct
 import json
 import math
 
+
 def make_box_geometry():
     """Box from -0.5 to 0.5 on each axis, 24 verts (4 per face), 36 indices."""
-    # 6 faces, each with 4 vertices and proper normals
     faces = [
-        # +X face
         ([0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5], [1,0,0]),
-        # -X face
         ([-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5], [-0.5, -0.5, -0.5], [-1,0,0]),
-        # +Y face
         ([-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5], [0,1,0]),
-        # -Y face
         ([-0.5, -0.5, 0.5], [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [0,-1,0]),
-        # +Z face
         ([-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5], [0,0,1]),
-        # -Z face
         ([0.5, -0.5, -0.5], [-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0,0,-1]),
     ]
-    
+
     positions = []
     normals = []
     indices = []
-    
+
     for i, (v0, v1, v2, v3, n) in enumerate(faces):
         base = i * 4
         for v in [v0, v1, v2, v3]:
             positions.extend(v)
             normals.extend(n)
-        # Two triangles: (0,1,2) and (0,2,3)
         indices.extend([base, base+1, base+2, base, base+2, base+3])
-    
+
     return positions, normals, indices
 
 
-def make_cylinder_geometry(x1, x2, radius=0.06, segments=32):
-    """Cylinder along X axis from x1 to x2."""
-    N = segments
+def make_tube_along_curve(curve_fn, t_start, t_end, num_segments=64, ring_segments=24, radius=0.05):
+    """Generate a tube (cylinder-like surface) along a parametric curve.
+
+    curve_fn(t) -> (x, y, z)  for t in [t_start, t_end]
+
+    The tube has ring_segments vertices per ring, num_segments+1 rings,
+    and end caps. Normals point outward from the curve centerline.
+    """
     positions = []
     normals = []
     indices = []
-    
-    # Bottom ring (x1)
-    for i in range(N):
-        theta = 2.0 * math.pi * i / N
-        y = radius * math.cos(theta)
-        z = radius * math.sin(theta)
-        positions.extend([x1, y, z])
-        normals.extend([0.0, math.cos(theta), math.sin(theta)])
-    
-    # Top ring (x2)
-    for i in range(N):
-        theta = 2.0 * math.pi * i / N
-        y = radius * math.cos(theta)
-        z = radius * math.sin(theta)
-        positions.extend([x2, y, z])
-        normals.extend([0.0, math.cos(theta), math.sin(theta)])
-    
-    # Bottom cap center
-    positions.extend([x1, 0.0, 0.0])
-    normals.extend([-1.0, 0.0, 0.0])
-    # Top cap center
-    positions.extend([x2, 0.0, 0.0])
-    normals.extend([1.0, 0.0, 0.0])
-    
-    bottom_center = 2 * N
-    top_center = 2 * N + 1
-    
-    # Side faces
-    for i in range(N):
-        ni = (i + 1) % N
-        # bottom_i=i, bottom_next=ni, top_i=N+i, top_next=N+ni
-        indices.extend([i, ni, N + ni])
-        indices.extend([i, N + ni, N + i])
-    
-    # Bottom cap (facing -X, CCW from outside)
-    for i in range(N):
-        ni = (i + 1) % N
-        indices.extend([bottom_center, ni, i])
-    
-    # Top cap (facing +X, CCW from outside)
-    for i in range(N):
-        ni = (i + 1) % N
-        indices.extend([top_center, i, ni])
-    
+
+    # Sample the curve and compute tangents
+    points = []
+    tangents = []
+    dt = (t_end - t_start) / num_segments
+
+    for i in range(num_segments + 1):
+        t = t_start + i * dt
+        p = curve_fn(t)
+        # Numerical tangent (central difference)
+        eps = dt * 0.5
+        if i == 0:
+            p_next = curve_fn(t + eps)
+            tx, ty, tz = p_next[0]-p[0], p_next[1]-p[1], p_next[2]-p[2]
+        elif i == num_segments:
+            p_prev = curve_fn(t - eps)
+            tx, ty, tz = p[0]-p_prev[0], p[1]-p_prev[1], p[2]-p_prev[2]
+        else:
+            p_next = curve_fn(t + eps)
+            p_prev = curve_fn(t - eps)
+            tx, ty, tz = p_next[0]-p_prev[0], p_next[1]-p_prev[1], p_next[2]-p_prev[2]
+        tl = math.sqrt(tx*tx + ty*ty + tz*tz)
+        if tl > 1e-10:
+            tx, ty, tz = tx/tl, ty/tl, tz/tl
+        else:
+            tx, ty, tz = 1.0, 0.0, 0.0
+        points.append(p)
+        tangents.append((tx, ty, tz))
+
+    # Build rings — for each curve point, create a ring of vertices perpendicular to the tangent
+    rings = []  # list of (start_index, [vertex_indices])
+
+    for i in range(num_segments + 1):
+        px, py, pz = points[i]
+        tx, ty, tz = tangents[i]
+
+        # Build a local frame: tangent = T, find two perpendicular vectors
+        # Use world-up (0,1,0) to build perpendicular vectors
+        # If tangent is nearly parallel to up, use (0,0,1) instead
+        up = (0.0, 1.0, 0.0)
+        dot = abs(tx*up[0] + ty*up[1] + tz*up[2])
+        if dot > 0.99:
+            up = (0.0, 0.0, 1.0)
+
+        # u = normalize(cross(tangent, up))
+        ux = ty*up[2] - tz*up[1]
+        uy = tz*up[0] - tx*up[2]
+        uz = tx*up[1] - ty*up[0]
+        ul = math.sqrt(ux*ux + uy*uy + uz*uz)
+        ux, uy, uz = ux/ul, uy/ul, uz/ul
+
+        # v = cross(tangent, u) — already unit length
+        vx = ty*uz - tz*uy
+        vy = tz*ux - tx*uz
+        vz = tx*uy - ty*ux
+
+        ring_start = len(positions) // 3
+
+        for j in range(ring_segments):
+            theta = 2.0 * math.pi * j / ring_segments
+            cos_t = math.cos(theta)
+            sin_t = math.sin(theta)
+
+            # Vertex position = center + radius * (cos*U + sin*V)
+            vx_pos = px + radius * (cos_t * ux + sin_t * vx)
+            vy_pos = py + radius * (cos_t * uy + sin_t * vy)
+            vz_pos = pz + radius * (cos_t * uz + sin_t * vz)
+
+            positions.extend([vx_pos, vy_pos, vz_pos])
+            # Normal = outward direction (cos*U + sin*V), normalized
+            normals.extend([
+                cos_t * ux + sin_t * vx,
+                cos_t * uy + sin_t * vy,
+                cos_t * uz + sin_t * vz,
+            ])
+
+        rings.append(ring_start)
+
+    # Side faces — connect ring i to ring i+1
+    for i in range(num_segments):
+        r0 = rings[i]
+        r1 = rings[i + 1]
+        for j in range(ring_segments):
+            nj = (j + 1) % ring_segments
+            # Triangle 1: r0+j, r0+nj, r1+nj
+            indices.extend([r0 + j, r0 + nj, r1 + nj])
+            # Triangle 2: r0+j, r1+nj, r1+j
+            indices.extend([r0 + j, r1 + nj, r1 + j])
+
+    # End caps
+    # Start cap center
+    start_center_idx = len(positions) // 3
+    positions.extend([points[0][0], points[0][1], points[0][2]])
+    # Normal points backward (opposite to tangent at start)
+    normals.extend([-tangents[0][0], -tangents[0][1], -tangents[0][2]])
+
+    # End cap center
+    end_center_idx = len(positions) // 3
+    positions.extend([points[-1][0], points[-1][1], points[-1][2]])
+    normals.extend([tangents[-1][0], tangents[-1][1], tangents[-1][2]])
+
+    # Start cap triangles (facing backward, CCW from outside)
+    r0 = rings[0]
+    for j in range(ring_segments):
+        nj = (j + 1) % ring_segments
+        indices.extend([start_center_idx, r0 + nj, r0 + j])
+
+    # End cap triangles (facing forward, CCW from outside)
+    r_last = rings[-1]
+    for j in range(ring_segments):
+        nj = (j + 1) % ring_segments
+        indices.extend([end_center_idx, r_last + j, r_last + nj])
+
     return positions, normals, indices
 
 
@@ -99,34 +166,37 @@ def pack_uint16s(values):
 
 
 def pad4(data):
-    """Pad data to 4-byte alignment."""
     while len(data) % 4 != 0:
         data += b'\x00'
     return data
 
 
 def main():
-    # Generate geometry
+    # Generate box geometry (reused for all three boxes)
     box_pos, box_nor, box_idx = make_box_geometry()
-    cable_pos, cable_nor, cable_idx = make_cylinder_geometry(-1.5, 1.5, radius=0.05, segments=32)
-    
+
+    # Cable curve: arcs from x=-2 to x=2, peaking at y=1.5 above the middle box
+    # The middle box is at x=0 with half-height 0.5, so the cable clears it
+    def arc_curve(t):
+        # t in [0, 1] -> x from -2 to 2, y arcs up to 1.5
+        x = -2.0 + 4.0 * t
+        y = 1.5 * math.sin(math.pi * t)  # 0 at t=0, 1.5 at t=0.5, 0 at t=1
+        z = 0.0
+        return (x, y, z)
+
+    cable_pos, cable_nor, cable_idx = make_tube_along_curve(
+        arc_curve, t_start=0.0, t_end=1.0,
+        num_segments=64, ring_segments=20, radius=0.045,
+    )
+
     # Build binary buffer
-    # Layout:
-    #   box_pos:   24*3*4 = 288 bytes, offset 0
-    #   box_nor:   24*3*4 = 288 bytes, offset 288
-    #   box_idx:   36*2   = 72 bytes,  offset 576
-    #   cable_pos: 66*3*4 = 792 bytes, offset 648
-    #   cable_nor: 66*3*4 = 792 bytes, offset 1440
-    #   cable_idx:  192*2  = 384 bytes, offset 2232
-    # Total: 2616 bytes
-    
     box_pos_bytes = pack_floats(box_pos)
     box_nor_bytes = pack_floats(box_nor)
     box_idx_bytes = pack_uint16s(box_idx)
     cable_pos_bytes = pack_floats(cable_pos)
     cable_nor_bytes = pack_floats(cable_nor)
     cable_idx_bytes = pack_uint16s(cable_idx)
-    
+
     # Calculate offsets
     off_box_pos = 0
     off_box_nor = off_box_pos + len(box_pos_bytes)
@@ -134,27 +204,28 @@ def main():
     off_cable_pos = off_box_idx + len(box_idx_bytes)
     off_cable_nor = off_cable_pos + len(cable_pos_bytes)
     off_cable_idx = off_cable_nor + len(cable_nor_bytes)
-    
+
     bin_data = (
         box_pos_bytes + box_nor_bytes + box_idx_bytes +
         cable_pos_bytes + cable_nor_bytes + cable_idx_bytes
     )
     bin_data = pad4(bin_data)
-    
+
     n_box_verts = len(box_pos) // 3
     n_box_idx = len(box_idx)
     n_cable_verts = len(cable_pos) // 3
     n_cable_idx = len(cable_idx)
-    
+
     # Build glTF JSON
     gltf = {
         "asset": {"version": "2.0", "generator": "custom"},
         "scene": 0,
-        "scenes": [{"nodes": [0, 1, 2]}],
+        "scenes": [{"nodes": [0, 1, 2, 3]}],
         "nodes": [
-            {"mesh": 0, "translation": [-2.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]},  # box1
-            {"mesh": 0, "translation": [2.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]},   # box2
-            {"mesh": 1, "translation": [0.0, 0.0, 0.0]},                              # cable
+            {"mesh": 0, "translation": [-2.0, 0.0, 0.0]},   # left box
+            {"mesh": 0, "translation": [0.0, 0.0, 0.0]},     # middle box
+            {"mesh": 0, "translation": [2.0, 0.0, 0.0]},     # right box
+            {"mesh": 1},                                       # cable (world-space, no transform)
         ],
         "meshes": [
             {"primitives": [{
@@ -185,7 +256,6 @@ def main():
                     "roughnessFactor": 0.4,
                 },
                 "emissiveFactor": [0.2, 0.9, 0.5],
-                "_emissiveIntensity": 2.0,  # custom extension for glow
             },
         ],
         "buffers": [{"byteLength": len(bin_data)}],
@@ -206,24 +276,24 @@ def main():
             {"bufferView": 5, "componentType": 5123, "count": n_cable_idx, "type": "SCALAR"},
         ],
     }
-    
+
     # Encode GLB
     json_bytes = json.dumps(gltf, separators=(',', ':')).encode('utf-8')
     json_bytes = pad4(json_bytes)
-    
+
     glb_header = struct.pack('<III', 0x46546C4, 2, 12 + 8 + len(json_bytes) + 8 + len(bin_data))
     json_chunk = struct.pack('<II', len(json_bytes), 0x4E4F534A) + json_bytes
     bin_chunk = struct.pack('<II', len(bin_data), 0x004E4942) + bin_data
-    
+
     glb_data = glb_header + json_chunk + bin_chunk
-    
+
     out_path = "www/scene.glb"
     with open(out_path, 'wb') as f:
         f.write(glb_data)
-    
+
     print(f"Generated {out_path}: {len(glb_data)} bytes")
-    print(f"  Box: {n_box_verts} verts, {n_box_idx} indices")
-    print(f"  Cable: {n_cable_verts} verts, {n_cable_idx} indices")
+    print(f"  Box:    {n_box_verts} verts, {n_box_idx} indices (x3 boxes)")
+    print(f"  Cable:  {n_cable_verts} verts, {n_cable_idx} indices (curved tube)")
     print(f"  Buffer: {len(bin_data)} bytes")
 
 
