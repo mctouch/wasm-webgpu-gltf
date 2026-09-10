@@ -1,0 +1,9 @@
+/target/
+**/*.rs.bk
+Cargo.lock
+*.swp
+*.swo
+.DS_Store
+
+# wasm-pack output is committed (needed for IIS deploy without build tools)
+# but .gitignore inside www/pkg keeps the wasm-pack .gitignore

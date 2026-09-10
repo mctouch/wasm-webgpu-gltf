@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>WebGPU glTF Viewer — Two Boxes + Glowing Cable</title>
+    <style>
+        html, body {
+            margin: 0; padding: 0;
+            background: #050508;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #info {
+            position: fixed;
+            top: 12px; left: 16px;
+            color: rgba(180, 220, 255, 0.7);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', monospace;
+            font-size: 12px;
+            pointer-events: none;
+            user-select: none;
+        }
+        #error {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff6680;
+            font-family: monospace;
+            font-size: 14px;
+            max-width: 600px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas" width="1280" height="720"></canvas>
+    <div id="info">WebGPU · glTF · two boxes + glowing cable</div>
+    <div id="error" style="display:none"></div>
+    <script type="module">
+        const canvas = document.getElementById("canvas");
+        const errorEl = document.getElementById("error");
+
+        function showError(msg) {
+            errorEl.textContent = msg;
+            errorEl.style.display = "block";
+        }
+
+        if (!navigator.gpu) {
+            showError("WebGPU is not supported in this browser.\nUse Chrome/Edge 113+ with --enable-unsafe-webgpu if needed.");
+        } else {
+            (async () => {
+                try {
+                    const wasmModule = await import("./pkg/wasm_webgpu_gltf.js");
+                    await wasmModule.default();
+                    const renderer = await wasmModule.Renderer.init(canvas);
+
+                    function resize() {
+                        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+                        const w = Math.floor(window.innerWidth * dpr);
+                        const h = Math.floor(window.innerHeight * dpr);
+                        if (canvas.width !== w || canvas.height !== h) {
+                            canvas.width = w;
+                            canvas.height = h;
+                            renderer.resize(w, h);
+                        }
+                    }
+                    resize();
+                    window.addEventListener("resize", resize);
+
+                    function frame() {
+                        renderer.render();
+                        requestAnimationFrame(frame);
+                    }
+                    requestAnimationFrame(frame);
+                } catch (e) {
+                    console.error(e);
+                    showError("Failed to initialize renderer:\n" + (e?.message || String(e)));
+                }
+            })();
+        }
+    </script>
+</body>
+</html>

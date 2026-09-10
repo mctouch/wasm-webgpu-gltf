@@ -1,0 +1,15 @@
+{
+  "name": "wasm-webgpu-gltf",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "wasm_webgpu_gltf_bg.wasm",
+    "wasm_webgpu_gltf.js",
+    "wasm_webgpu_gltf.d.ts"
+  ],
+  "main": "wasm_webgpu_gltf.js",
+  "types": "wasm_webgpu_gltf.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
