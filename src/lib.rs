@@ -70,11 +70,34 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_glow(in: VsOut) -> @location(0) vec4<f32> {
     let t = u.time;
-    let pulse = 0.5 + 0.5 * sin(t * 2.0);
-    let wave = 0.5 + 0.5 * sin(t * 4.0 + in.world_pos.x * 5.0);
-    let glow = vec3(0.05, 1.0, 0.4);
-    let intensity = (0.7 + pulse * 0.5) * (0.5 + wave * 0.5);
-    return vec4(glow * intensity, 1.0);
+
+    // The cable runs from x=-2 to x=2. Map to path coordinate [0, 1].
+    let path = (in.world_pos.x + 2.0) / 4.0;
+
+    // Traveling bloom pulse: sweeps from box to box every ~2.5 s
+    let speed = 0.4;  // cycles per second
+    let head = fract(t * speed);  // position of the bright head along [0, 1]
+
+    // Distance from the traveling head
+    let d = path - head;
+
+    // Base dim glow along the whole cable
+    let base_glow = vec3(0.02, 0.08, 0.04);
+
+    // Bloom: bright Gaussian centered at the head, with a trailing tail.
+    // Use pow for a tight bright core that falls off quickly.
+    let core = exp(-d * d * 80.0);        // tight bright core
+    let tail = exp(-d * d * 12.0) * 0.4;  // softer trailing bloom
+
+    // Only show bloom ahead of and slightly behind the head (d > -0.15)
+    let bloom_mask = select(0.0, 1.0, d > -0.15);
+    let bloom = (core + tail) * bloom_mask;
+
+    // Bright bloom color: white-hot core fading to cyan-green
+    let bloom_color = mix(vec3(0.1, 1.0, 0.5), vec3(0.9, 1.0, 0.95), core);
+
+    let color = base_glow + bloom_color * bloom * 1.5;
+    return vec4(color, 1.0);
 }
 "#;
 
