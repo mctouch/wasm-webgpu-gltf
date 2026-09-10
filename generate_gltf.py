@@ -175,50 +175,60 @@ def main():
     # Generate box geometry (reused for all three boxes)
     box_pos, box_nor, box_idx = make_box_geometry()
 
-    # Cable path: rectangular stepped route that clears the middle box
+    # Cable path: rectangular stepped route with curved corners that clears the middle box
     # Left box top is at y=0.5 (box at x=-2, half-size 0.5)
     # Middle box top is at y=0.5 (box at x=0)
     # Right box top is at y=0.5 (box at x=2)
-    # The cable goes: up from left box top -> across above middle box -> down to right box top
     #
-    # Waypoints (in world space):
-    #   (-2.0, 0.5, 0)  -> start on left box top
-    #   (-2.0, 1.5, 0)  -> go up
-    #   ( 2.0, 1.5, 0)  -> go across (clears middle box which tops at y=0.5)
-    #   ( 2.0, 0.5, 0)  -> go down to right box top
-    waypoints = [
-        (-2.0, 0.5, 0.0),
-        (-2.0, 1.5, 0.0),
-        ( 2.0, 1.5, 0.0),
-        ( 2.0, 0.5, 0.0),
-    ]
+    # The cable goes: up from left box top -> curve right -> across above middle box ->
+    #   curve down -> down to right box top
+    #
+    # Corner radius for the rounded turns
+    R = 0.4
+    y_low = 0.5    # box top height
+    y_high = 1.5   # horizontal run height
+    x_left = -2.0
+    x_right = 2.0
 
-    # Build a piecewise-linear parameterization
-    # Compute cumulative distance along the path
-    seg_lengths = []
-    total_len = 0.0
-    for i in range(len(waypoints) - 1):
-        dx = waypoints[i+1][0] - waypoints[i][0]
-        dy = waypoints[i+1][1] - waypoints[i][1]
-        dz = waypoints[i+1][2] - waypoints[i][2]
-        sl = math.sqrt(dx*dx + dy*dy + dz*dz)
-        seg_lengths.append(sl)
-        total_len += sl
+    # The path has 5 segments:
+    #   1. Straight up:    (-2.0, 0.5) -> (-2.0, 1.5-R)
+    #   2. Quarter circle:  (-2.0, 1.5-R) -> (-2.0+R, 1.5)  [center at (-2.0+R, 1.5-R)]
+    #   3. Straight across: (-2.0+R, 1.5) -> (2.0-R, 1.5)
+    #   4. Quarter circle:  (2.0-R, 1.5) -> (2.0, 1.5-R)    [center at (2.0-R, 1.5-R)]
+    #   5. Straight down:  (2.0, 1.5-R) -> (2.0, 0.5)
 
     def stepped_curve(t):
-        # t in [0, 1] -> position along the path
-        target = t * total_len
+        # t in [0, 1] over the whole path
+        # Compute segment lengths
+        seg_lens = [
+            y_high - R - y_low,                     # 1. straight up
+            0.5 * math.pi * R,                       # 2. quarter circle
+            (x_right - R) - (x_left + R),            # 3. straight across
+            0.5 * math.pi * R,                       # 4. quarter circle
+            y_high - R - y_low,                      # 5. straight down
+        ]
+        total = sum(seg_lens)
+        target = t * total
         acc = 0.0
-        for i, sl in enumerate(seg_lengths):
-            if acc + sl >= target or i == len(seg_lengths) - 1:
+        for i, sl in enumerate(seg_lens):
+            if acc + sl >= target or i == len(seg_lens) - 1:
                 local = (target - acc) / sl if sl > 1e-10 else 0.0
-                local = max(0.0, min(1.0, local))
-                x = waypoints[i][0] + local * (waypoints[i+1][0] - waypoints[i][0])
-                y = waypoints[i][1] + local * (waypoints[i+1][1] - waypoints[i][1])
-                z = waypoints[i][2] + local * (waypoints[i+1][2] - waypoints[i][2])
-                return (x, y, z)
+                if i == 0:
+                    return (x_left, y_low + local * sl, 0.0)
+                elif i == 1:
+                    # Quarter circle: center at (x_left+R, y_high-R), from angle pi to pi/2
+                    angle = math.pi - local * 0.5 * math.pi
+                    return (x_left + R + R * math.cos(angle), y_high - R + R * math.sin(angle), 0.0)
+                elif i == 2:
+                    return (x_left + R + local * sl, y_high, 0.0)
+                elif i == 3:
+                    # Quarter circle: center at (x_right-R, y_high-R), from angle pi/2 to 0
+                    angle = 0.5 * math.pi - local * 0.5 * math.pi
+                    return (x_right - R + R * math.cos(angle), y_high - R + R * math.sin(angle), 0.0)
+                elif i == 4:
+                    return (x_right, y_high - R - local * sl, 0.0)
             acc += sl
-        return waypoints[-1]
+        return (x_right, y_low, 0.0)
 
 
     cable_pos, cable_nor, cable_idx = make_tube_along_curve(
