@@ -175,17 +175,54 @@ def main():
     # Generate box geometry (reused for all three boxes)
     box_pos, box_nor, box_idx = make_box_geometry()
 
-    # Cable curve: arcs from x=-2 to x=2, peaking at y=1.5 above the middle box
-    # The middle box is at x=0 with half-height 0.5, so the cable clears it
-    def arc_curve(t):
-        # t in [0, 1] -> x from -2 to 2, y arcs up to 1.5
-        x = -2.0 + 4.0 * t
-        y = 1.5 * math.sin(math.pi * t)  # 0 at t=0, 1.5 at t=0.5, 0 at t=1
-        z = 0.0
-        return (x, y, z)
+    # Cable path: rectangular stepped route that clears the middle box
+    # Left box top is at y=0.5 (box at x=-2, half-size 0.5)
+    # Middle box top is at y=0.5 (box at x=0)
+    # Right box top is at y=0.5 (box at x=2)
+    # The cable goes: up from left box top -> across above middle box -> down to right box top
+    #
+    # Waypoints (in world space):
+    #   (-2.0, 0.5, 0)  -> start on left box top
+    #   (-2.0, 1.5, 0)  -> go up
+    #   ( 2.0, 1.5, 0)  -> go across (clears middle box which tops at y=0.5)
+    #   ( 2.0, 0.5, 0)  -> go down to right box top
+    waypoints = [
+        (-2.0, 0.5, 0.0),
+        (-2.0, 1.5, 0.0),
+        ( 2.0, 1.5, 0.0),
+        ( 2.0, 0.5, 0.0),
+    ]
+
+    # Build a piecewise-linear parameterization
+    # Compute cumulative distance along the path
+    seg_lengths = []
+    total_len = 0.0
+    for i in range(len(waypoints) - 1):
+        dx = waypoints[i+1][0] - waypoints[i][0]
+        dy = waypoints[i+1][1] - waypoints[i][1]
+        dz = waypoints[i+1][2] - waypoints[i][2]
+        sl = math.sqrt(dx*dx + dy*dy + dz*dz)
+        seg_lengths.append(sl)
+        total_len += sl
+
+    def stepped_curve(t):
+        # t in [0, 1] -> position along the path
+        target = t * total_len
+        acc = 0.0
+        for i, sl in enumerate(seg_lengths):
+            if acc + sl >= target or i == len(seg_lengths) - 1:
+                local = (target - acc) / sl if sl > 1e-10 else 0.0
+                local = max(0.0, min(1.0, local))
+                x = waypoints[i][0] + local * (waypoints[i+1][0] - waypoints[i][0])
+                y = waypoints[i][1] + local * (waypoints[i+1][1] - waypoints[i][1])
+                z = waypoints[i][2] + local * (waypoints[i+1][2] - waypoints[i][2])
+                return (x, y, z)
+            acc += sl
+        return waypoints[-1]
+
 
     cable_pos, cable_nor, cable_idx = make_tube_along_curve(
-        arc_curve, t_start=0.0, t_end=1.0,
+        stepped_curve, t_start=0.0, t_end=1.0,
         num_segments=64, ring_segments=20, radius=0.045,
     )
 
